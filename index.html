@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ski Resort LED Display</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      color: #0f0;
+      font-family: 'Courier New', monospace;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    #display {
+      width: 100vw
+      height: 15vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .message {
+      white-space: nowrap;
+      font-size: 3vw;
+      text-shadow: 0 0 8px #0f0, 0 0 5px #0f0;
+      animation: scroll 14s linear infinite;
+    }
+    @keyframes scroll {
+      0% { transform: translateX(100%); }
+      100% { transform: translateX(-100%); }
+    }
+    #webcam {
+      width: 100vw;
+      height: 85vh;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="display">
+    <span class="message">Loading ski resort data…</span>
+  </div>
+
+  <iframe id="webcam" src="" allowfullscreen></iframe>
+
+  <script>
+    // List of webcams with embed URLs
+    const webcams = [
+      {
+        name: "Hintertux",
+        embed: "https://hintertux.panomax.com/gefrorenewand"
+      },
+      {
+        name: "Mayrhofen (Schafkopf)",
+        embed: "https://pano.mayrhofner-bergbahnen.com/schafkopf"
+      },
+      {
+        name: "Hochfügen",
+        embed: "https://www.webcamgalore.com/hochfuegen/webcam-34905"
+      }
+    ];
+
+    const display = document.getElementById("display");
+    const webcamFrame = document.getElementById("webcam");
+    let camIdx = 0;
+
+    // Snow data logic (unchanged)
+    const resorts = [
+      { name: "Hintertux", url: "https://api.allorigins.win/raw?url=https://www.bergfex.com/hintertux/schneebericht/&nocache=1" },
+      { name: "Mayrhofen", url: "https://api.allorigins.win/raw?url=https://www.bergfex.com/mayrhofen/schneebericht/&nocache=1" },
+      { name: "Hochfügen", url: "https://api.allorigins.win/raw?url=https://www.bergfex.com/hochfuegen/schneebericht/&nocache=1" },
+      { name: "Ischgl", url: "https://api.allorigins.win/raw?url=https://www.bergfex.com/ischgl/schneebericht/&nocache=1" }
+    ];
+    let idx = 0;
+
+    function htmlToText(html) {
+      const noScripts = html.replace(/<script[\s\S]*?<\/script>/gi, '')
+                            .replace(/<style[\s\S]*?<\/style>/gi, '');
+      return noScripts.replace(/<[^>]+>/g, '\n')
+        .replace(/&nbsp;|&#160;/g, ' ')
+        .replace(/&[a-z]+;/gi, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{2,}/g, '\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+    }
+
+    function firstCm(text) {
+      const m = text.match(/(\d+)\s*cm\b/i);
+      return m ? `${m[1]} cm` : null;
+    }
+
+    function findNumberAfterLabels(text, labels, maxDist = 160) {
+      for (const lbl of labels) {
+        const re = new RegExp(`${lbl}[\\s\\S]{0,${maxDist}}?(\\d+)\\s*cm\\b`, 'i');
+        const m = text.match(re);
+        if (m) return `${m[1]} cm`;
+      }
+      return null;
+    }
+
+    function findLatestSnowfall(text) {
+      const labels = ['Latest\\s*snowfall','Letzter\\s*Schneefall'];
+      const dateFragment = '((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Mo|Di|Mi|Do|Fr|Sa|So)[a-z]*,\\s*)?\\d{1,2}\\.\\d{1,2}\\.?';
+      for (const lbl of labels) {
+        const re = new RegExp(`${lbl}[\\s\\S]{0,80}?${dateFragment}`, 'i');
+        const m = text.match(re);
+        if (m) return m[0].replace(new RegExp(lbl, 'i'), '').trim();
+      }
+      return null;
+    }
+
+    function findLifts(text) {
+      const patterns = [
+        /Open\s*lifts[^\d]{0,20}(\d+)[^\d]{0,6}(?:of|\/)[^\d]{0,6}(\d+)/i,
+        /(Lifte(?:\s*in\s*Betrieb)?|Geöffnete\s*Lifte)[^\d]{0,20}(\d+)[^\d]{0,6}(?:von|\/)[^\d]{0,6}(\d+)/i,
+        /\b(\d+)\s*(?:\/|of|von)\s*(\d+)\b/
+      ];
+      for (const re of patterns) {
+        const m = text.match(re);
+        if (m) {
+          if (re === patterns[1] && m.length >= 4) return `${m[2]}/${m[3]}`;
+          if (re === patterns[0]) return `${m[1]}/${m[2]}`;
+          return `${m[1]}/${m[2]}`;
+        }
+      }
+      return null;
+    }
+
+    async function fetchResort(resort) {
+      try {
+        const resp = await fetch(resort.url, { cache: 'no-store' });
+        const html = await resp.text();
+        const text = htmlToText(html);
+
+        const mountain = findNumberAfterLabels(text, ['Mountain\\s*\\(.*?\\)', 'Mountain', 'Piste', 'Berg', 'Gipfel']) || firstCm(text) || 'N/A';
+        const valley = findNumberAfterLabels(text, ['Location\\s*\\(.*?\\)', 'Location', 'Tal', 'Ort', 'Talstation']) || 'N/A';
+        const latest = findLatestSnowfall(text) || 'N/A';
+        const lifts = findLifts(text) || 'N/A';
+
+        return `${resort.name} | Mountain: ${mountain} | Valley: ${valley} | Last: ${latest} | Lifts: ${lifts}`;
+      } catch (e) {
+        return `${resort.name} | Data not available`;
+      }
+    }
+
+    async function updateData() {
+      const resort = resorts[idx];
+      const msg = await fetchResort(resort);
+      display.innerHTML = `<span class="message">${msg}</span>`;
+      idx = (idx + 1) % resorts.length;
+    }
+
+    function rotateCam() {
+      const cam = webcams[camIdx];
+      webcamFrame.src = cam.embed;
+      camIdx = (camIdx + 1) % webcams.length;
+    }
+
+    // Start routines
+    updateData();
+    rotateCam();
+    setInterval(updateData, 10000);
+    setInterval(rotateCam, 10000);
+  </script>
+</body>
+</html>
